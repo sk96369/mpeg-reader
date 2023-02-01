@@ -11,9 +11,51 @@ mod mpeg_file_structure {
 
     use super::*;
 
+    pub struct MPEG {
+        frames: Vec<Frame>,
+    }
+
+    impl From<File> for MPEG {
+        pub fn from(file: File) -> Self {
+            let mut mpeg = MPEG {
+                frames: Vec::new(),
+            };
+            let mut contents: Bits = BitVec::new();
+            let syncword: Bits = BitVec::repeat(true, SYNC_LEN);
+            io::copy(&mut file, &mut contents).expect("Assuming io::copy is all gucci");
+
+            while
+
+            mpeg
+        }
+    }
+
     pub struct Frame {
         header: Header,
-        data: Vec<u8>,
+        data: Bits,
+    }
+
+    impl Frame {
+        fn from(data: Bits) -> Self {
+            let mut header_data: Bits = BitVec::new();
+            let mut cursor_pos = 31;
+            contents.windows(32)
+                .skip_while(|x| {
+                    cursor_pos += 1;
+                    println!("asd");
+                    x[..11] != syncword
+                })
+                .next()
+                .unwrap()
+                .clone_into(&mut header_data);
+            let header = Header::from(header_data);
+            let data: Bits = BitVec::new();
+            contents[cursor_pos..(cursor_pos + header.get_frame_len())].clone_into(&mut data);
+            Frame {
+                data: data,
+                header: header,
+            }
+        }
     }
 
     //Formula for calculating frame length in bytes:
@@ -30,7 +72,7 @@ mod mpeg_file_structure {
     }
 
     impl Header {
-        fn get_frame_len(&self) -> usize {
+        pub fn get_frame_len(&self) -> usize {
             ((144 * self.get_bitrate() as usize) / self.get_sampling_rate() as usize) + self.get_padding() as usize
         }
     }
@@ -238,63 +280,31 @@ mod mpeg_file_structure {
     }
 }
 
-fn read_first_frame(path: &str) -> Header {
-    let mut contents: Bits = BitVec::new();
-    let syncword: Bits = BitVec::repeat(true, SYNC_LEN);
-    io::copy(&mut File::open(path).unwrap(), &mut contents).expect("Assuming io::copy is all gucci");
-    let mut header_data: Bits = BitVec::new();
-    contents.windows(32)
-        .skip_while(|x| {
-            println!("asd");
-            x[..11] != syncword
-        })
-        .next()
-        .unwrap()
-        .clone_into(&mut header_data);
-    Header::from(header_data)
-}
+
 
 fn read_file(path: &str) {
-    let mut contents: Bits = BitVec::new();
-    let mut syncword: Bits = BitVec::new();
-    io::copy(&mut File::open(path).unwrap(), &mut contents).expect("Assuming io::copy is all gucci");
-    let mut lengths: Vec<usize> = Vec::new();
-    let mut counter = SYNC_LEN;
-    let mut filesize = 3;
-    contents.iter()
-        .take(SYNC_LEN)
-        .for_each(|x| syncword.push(*x));
-
-    contents.windows(SYNC_LEN)
-        .step_by(4)
-        .for_each(|x| {
-            counter += 4;
-            filesize += 1;
-            if counter > 32 && x == syncword {
-                lengths.push(counter);
-                counter = SYNC_LEN;
-            }
-        });
-    println!("{:#?}\n", lengths);
-    println!("file size: {} bytes", filesize / 2);
+    let frame = from(path);
 }
 
 fn main() {
     let path = "test.mp3";
-    let frame = read_first_frame(path);
-    println!("{}", frame);
+    let mpeg_1 = MPEG::from(path);
     let mut test_field: Bits = BitVec::new();
     io::copy(&mut File::open(path).unwrap(), &mut test_field).unwrap();
+    dbg!("Frame 1:");
     for i in (0..124).step_by(4) {
-        println!("{:?}", &test_field[i..i+4]);
+        dbg!("{:?}", &test_field[i..i+4]);
     }
 
     let path = "huh.mp3";
-    let frame = read_first_frame(path);
-    println!("{}", frame);
+    let mpeg_2 = MPEG::from(path);
     let mut test_field: Bits = BitVec::new();
     io::copy(&mut File::open(path).unwrap(), &mut test_field).unwrap();
+    dbg!("Frame 2:");
     for i in (0..124).step_by(4) {
-        println!("{:?}", &test_field[i..i+4]);
+        dbg!("{:?}", &test_field[i..i+4]);
     }
+
+    println!("test.mp3:\n{}\n", mpeg_1.frames.first().unwrap());
+    println!("huh.mp3:\n{}", mpeg_2.frames.first().unwrap());
 }

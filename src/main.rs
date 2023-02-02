@@ -1,6 +1,5 @@
 use std::{fs::File, io};
 use bitvec::prelude::*;
-use mpeg_file_structure::*;
 
 const SYNC_LEN: usize = 11;
 
@@ -15,16 +14,41 @@ mod mpeg_file_structure {
         frames: Vec<Frame>,
     }
 
+    impl MPEG {
+        pub fn open(path: &str) -> MPEG {
+            let file = File::open(path).unwrap();
+            MPEG::from(file)
+        }
+    }
+
     impl From<File> for MPEG {
-        pub fn from(file: File) -> Self {
+        fn from(file: File) -> Self {
             let mut mpeg = MPEG {
                 frames: Vec::new(),
             };
             let mut contents: Bits = BitVec::new();
             let syncword: Bits = BitVec::repeat(true, SYNC_LEN);
+            let mut cursor_pos = 31;
             io::copy(&mut file, &mut contents).expect("Assuming io::copy is all gucci");
+            let mut window = contents.windows(32);
+            while let Some(data) = window.skip_while(|x| {
+                    cursor_pos += 1;
+                    println!("asd");
+                    x[..11] != syncword
+                })
+            .next() {
+                let mut header_data: Bits = BitVec::new();
+                data.clone_into(&mut header_data);
+                let header = Header::from(header_data);
 
-            while
+                let mut frame_data: Bits = BitVec::new();
+                contents[cursor_pos..(cursor_pos + header.get_frame_len())].clone_into(&mut frame_data);
+
+                mpeg.frames.push(Frame {
+                    data: frame_data,
+                    header: header,
+                });
+            }
 
             mpeg
         }
@@ -33,29 +57,6 @@ mod mpeg_file_structure {
     pub struct Frame {
         header: Header,
         data: Bits,
-    }
-
-    impl Frame {
-        fn from(data: Bits) -> Self {
-            let mut header_data: Bits = BitVec::new();
-            let mut cursor_pos = 31;
-            contents.windows(32)
-                .skip_while(|x| {
-                    cursor_pos += 1;
-                    println!("asd");
-                    x[..11] != syncword
-                })
-                .next()
-                .unwrap()
-                .clone_into(&mut header_data);
-            let header = Header::from(header_data);
-            let data: Bits = BitVec::new();
-            contents[cursor_pos..(cursor_pos + header.get_frame_len())].clone_into(&mut data);
-            Frame {
-                data: data,
-                header: header,
-            }
-        }
     }
 
     //Formula for calculating frame length in bytes:
@@ -282,13 +283,14 @@ mod mpeg_file_structure {
 
 
 
-fn read_file(path: &str) {
-    let frame = from(path);
-}
+
 
 fn main() {
+    use mpeg_file_structure::*;
+
     let path = "test.mp3";
-    let mpeg_1 = MPEG::from(path);
+
+    let mpeg_1 = MPEG::open(path);
     let mut test_field: Bits = BitVec::new();
     io::copy(&mut File::open(path).unwrap(), &mut test_field).unwrap();
     dbg!("Frame 1:");
@@ -297,7 +299,7 @@ fn main() {
     }
 
     let path = "huh.mp3";
-    let mpeg_2 = MPEG::from(path);
+    let mpeg_2 = MPEG::open(path);
     let mut test_field: Bits = BitVec::new();
     io::copy(&mut File::open(path).unwrap(), &mut test_field).unwrap();
     dbg!("Frame 2:");

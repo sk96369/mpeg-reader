@@ -11,46 +11,75 @@ mod mpeg_file_structure {
     use super::*;
 
     pub struct MPEG {
+        //-----------------Consider removing the filename field
+        filename: String,
         frames: Vec<Frame>,
     }
 
     impl MPEG {
         pub fn open(path: &str) -> MPEG {
-            let file = File::open(path).unwrap();
-            MPEG::from(file)
+            let mut file = File::open(path).unwrap();
+            let mut file_data: Bits = BitVec::new();
+            io::copy(&mut file, &mut file_data).unwrap();
+            let mut mpeg = MPEG::from(file_data);
+            mpeg.filename = path.to_string();
+            mpeg
         }
     }
 
-    impl From<File> for MPEG {
-        fn from(file: File) -> Self {
+    impl Display for MPEG {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let mut frame_lengths = String::new();
+            self.frames.iter()
+                .for_each(|f| frame_lengths += &f.get_frame_len().to_string()[..]);
+            write!(f, "Filename: {}\nFrames: {}\n", self.filename, self.frames.len())
+        }
+    }
+
+    impl From<Bits> for MPEG {
+        fn from(file_data: Bits) -> Self {
             let mut mpeg = MPEG {
+                filename: "unknown".to_string(),
                 frames: Vec::new(),
             };
-            let mut contents: Bits = BitVec::new();
             let syncword: Bits = BitVec::repeat(true, SYNC_LEN);
-            let mut cursor_pos = 31;
-            io::copy(&mut file, &mut contents).expect("Assuming io::copy is all gucci");
-            let mut window = contents.windows(32);
-            while let Some(data) = window.skip_while(|x| {
+            let mut cursor_pos = 0;
+            let mut block_end = 0;
+            let header_size = 32;
+            loop {
+                //println!("test: {}", cursor_pos);
+                while file_data[cursor_pos..(cursor_pos + SYNC_LEN)] != syncword {
                     cursor_pos += 1;
-                    println!("asd");
-                    x[..11] != syncword
-                })
-            .next() {
+                }
+
                 let mut header_data: Bits = BitVec::new();
-                data.clone_into(&mut header_data);
+                file_data[cursor_pos..cursor_pos + header_size].clone_into(&mut header_data);
+                println!("header data: {:?}", &header_data[11..]);
                 let header = Header::from(header_data);
+                //println!("cursor pos: {}", cursor_pos);
 
                 let mut frame_data: Bits = BitVec::new();
-                contents[cursor_pos..(cursor_pos + header.get_frame_len())].clone_into(&mut frame_data);
+                //header_size is included in the frame length
+                block_end = cursor_pos + header.get_frame_len();
+                println!("header bitrate: {}", header.get_bitrate());
+                println!("header samplerate: {}", header.get_sampling_rate());
+                println!("header frame_len: {}", header.get_frame_len());
+                println!("block end: {block_end}");
+                file_data[cursor_pos..(block_end)].clone_into(&mut frame_data);
 
+                println!("header: {header}\n");
                 mpeg.frames.push(Frame {
                     data: frame_data,
                     header: header,
                 });
-            }
 
-            mpeg
+                //println!("block end: {}", block_end);
+                if mpeg.frames.len() > 2 || block_end + 32 > file_data.len() {
+                    return mpeg;
+                }
+
+                cursor_pos = block_end;
+            }
         }
     }
 
@@ -72,12 +101,6 @@ mod mpeg_file_structure {
         }
     }
 
-    impl Header {
-        pub fn get_frame_len(&self) -> usize {
-            ((144 * self.get_bitrate() as usize) / self.get_sampling_rate() as usize) + self.get_padding() as usize
-        }
-    }
-
     pub trait MpegHeader {
         fn get_syncword(&self) -> String;
         fn get_version_id(&self) -> u8;
@@ -92,6 +115,7 @@ mod mpeg_file_structure {
         fn get_copyright(&self) -> bool;
         fn get_orig(&self) -> bool;
         fn get_emphasis(&self) -> u8;
+        fn get_frame_len(&self) -> usize;
     }
 
     impl MpegHeader for Frame {
@@ -145,6 +169,10 @@ mod mpeg_file_structure {
         fn get_emphasis(&self) -> u8 {
             self.header.get_emphasis()
         }
+
+        fn get_frame_len(&self) -> usize {
+            self.header.get_frame_len()
+        }
     }
 
     impl MpegHeader for Header {
@@ -165,11 +193,34 @@ mod mpeg_file_structure {
         }
 
         fn get_bitrate(&self) -> u16 {
-            self.data[16..20].load()
+            println!("test: {}", &self.data[16..20]);
+            match self.data[16..20].load() {
+                0 => 0,
+                1 => 32,
+                2 => 40,
+                3 => 48,
+                4 => 56,
+                5 => 64,
+                6 => 80,
+                7 => 96,
+                8 => 112,
+                9 => 128,
+                10 => 160,
+                11 => 192,
+                12 => 224,
+                13 => 256,
+                14 => 320,
+                _ => 0,
+            }
         }
 
         fn get_sampling_rate(&self) -> u16 {
-            self.data[20..22].load()
+            match self.data[20..22].load() {
+                0 => 44100,
+                1 => 48000,
+                2 => 32000,
+                _ => 0,
+            }
         }
 
         fn get_padding(&self) -> bool {
@@ -199,6 +250,10 @@ mod mpeg_file_structure {
         fn get_emphasis(&self) -> u8 {
             self.data[30..32].load()
         }
+
+        fn get_frame_len(&self) -> usize {
+            ((self.get_bitrate() as usize * 144000) / self.get_sampling_rate() as usize) + self.get_padding() as usize
+        }
     }
 
     impl Display for Header {
@@ -221,31 +276,12 @@ mod mpeg_file_structure {
                        true => "No ",
                    },
                    match self.get_bitrate() {
-                       0 => "free",
-                       1 => "32",
-                       2 => "40",
-                       3 => "48",
-                       4 => "56",
-                       5 => "64",
-                       6 => "80",
-                       7 => "96",
-                       8 => "112",
-                       9 => "128",
-                       10 => "160",
-                       11 => "192",
-                       12 => "224",
-                       13 => "256",
-                       14 => "320",
-                       _ => {
-                           println!("{}", self.get_bitrate());
-                           "brokey"
-                       },
+                       0 => "error".to_string(),
+                       val => val.to_string(),
                    },
                    match self.get_sampling_rate() {
-                       0 => "44100",
-                       1 => "48000",
-                       2 => "32000",
-                       _ => "error",
+                       0 => "error".to_string(),
+                       val => val.to_string(),
                    },
                    match self.get_padding() {
                        true => "yes",
@@ -289,24 +325,11 @@ fn main() {
     use mpeg_file_structure::*;
 
     let path = "test.mp3";
-
     let mpeg_1 = MPEG::open(path);
-    let mut test_field: Bits = BitVec::new();
-    io::copy(&mut File::open(path).unwrap(), &mut test_field).unwrap();
-    dbg!("Frame 1:");
-    for i in (0..124).step_by(4) {
-        dbg!("{:?}", &test_field[i..i+4]);
-    }
 
     let path = "huh.mp3";
     let mpeg_2 = MPEG::open(path);
-    let mut test_field: Bits = BitVec::new();
-    io::copy(&mut File::open(path).unwrap(), &mut test_field).unwrap();
-    dbg!("Frame 2:");
-    for i in (0..124).step_by(4) {
-        dbg!("{:?}", &test_field[i..i+4]);
-    }
 
-    println!("test.mp3:\n{}\n", mpeg_1.frames.first().unwrap());
-    println!("huh.mp3:\n{}", mpeg_2.frames.first().unwrap());
+    println!("test.mp3:\n{}\n", mpeg_1);
+    println!("huh.mp3:\n{}", mpeg_2);
 }
